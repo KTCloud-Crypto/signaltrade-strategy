@@ -25,3 +25,8 @@ MARKET_LAST_TICK = Gauge(
     "Last market tick Unix timestamp",
     ["market"],
 )
+STRATEGY_SIGNALS = Counter(
+    "signaltrade_strategy_signals_total",
+    "Generated strategy signals",
+    ["strategy", "market", "action", "source"],
+)

@@ -15,3 +15,11 @@ def reset_database():
     Base.metadata.create_all(engine)
     yield
     Base.metadata.drop_all(engine)
+
+
+@pytest.fixture
+def db_session():
+    from signaltrade_strategy.database import SessionLocal
+
+    with SessionLocal() as session:
+        yield session
