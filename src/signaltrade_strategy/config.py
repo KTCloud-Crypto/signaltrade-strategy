@@ -17,6 +17,7 @@ class Settings(BaseSettings):
     sqs_strategy_visibility_timeout_seconds: int = 60
     metrics_enabled: bool = True
     worker_metrics_port: int = 9101
+    internal_service_token: str = ""
 
     @property
     def watch_market_list(self) -> list[str]:

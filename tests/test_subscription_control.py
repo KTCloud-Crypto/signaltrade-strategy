@@ -7,7 +7,10 @@ from signaltrade_strategy.main import app
 from signaltrade_strategy.models import Strategy, SupportedMarket, UserStrategy, user_table
 
 
-def test_only_owned_subscription_is_paused() -> None:
+def test_only_owned_subscription_is_paused(monkeypatch) -> None:
+    from signaltrade_strategy.config import settings
+
+    monkeypatch.setattr(settings, "internal_service_token", "runtime-token")
     with SessionLocal() as db:
         db.execute(insert(user_table), [{"id": 1}, {"id": 2}])
         market = SupportedMarket(code="KRW-BTC", display_name="Bitcoin")
@@ -21,6 +24,7 @@ def test_only_owned_subscription_is_paused() -> None:
 
         response = TestClient(app).post(
             "/internal/strategy/subscriptions/pause",
+            headers={"X-SignalTrade-Service-Token": "runtime-token"},
             json={"user_id": 1, "subscription_ids": [owned.id, other.id], "paused": True},
         )
         assert response.status_code == 200

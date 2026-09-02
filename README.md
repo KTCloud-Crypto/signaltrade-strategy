@@ -16,4 +16,7 @@ API 실행:
 
 기준: `KTCloud-Crypto` `feat/132`
 `013107ae8ddd08bed02d88db89af7eeb0cf65bba`
+Trading의 수동 청산 시세 조회를 위해 내부 토큰으로 보호된 현재가 API를 제공합니다.
+Market Data 조회 책임은 Strategy에 유지하고 Trading에는 가격 조회 구현을 복사하지
+않습니다.
 
