@@ -37,7 +37,11 @@ def _active_definitions() -> list[StrategyDefinition]:
                 .join(UserStrategy, UserStrategy.strategy_id == Strategy.id)
                 .join(SupportedMarket, SupportedMarket.id == UserStrategy.market_id)
                 .filter(Strategy.enabled.is_(True), UserStrategy.enabled.is_(True))
-                .distinct().all())
+                .distinct(
+                    Strategy.id,
+                    SupportedMarket.code,
+                    UserStrategy.timeframe_minutes,
+                ).all())
         return [StrategyDefinition(s.id, s.code, market, timeframe, dict(s.parameters or {}))
                 for s, market, timeframe in rows]
 
