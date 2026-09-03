@@ -11,7 +11,7 @@ from signaltrade_strategy.identity_client import AuthenticatedUser, get_current_
 from signaltrade_strategy.market_data.upbit_price import get_current_price, get_market_tickers
 from signaltrade_strategy.models import (
     Strategy, StrategyRuntime, StrategySignal, StrategySubscriptionEvent, SupportedMarket,
-    UserStrategy,
+    UserStrategy, strategy_execution_table,
 )
 from signaltrade_strategy.schemas import (
     MarketTickerOut, ReservedStrategyOut, StrategyOut, StrategySignalOut,
@@ -147,11 +147,15 @@ def subscription_events(mode: Literal["simulated", "live"] = Query("simulated"),
 @router.get("/signals", response_model=list[StrategySignalOut])
 def signals(mode: Literal["simulated", "live"] = Query("simulated"), db: Session = Depends(get_db),
             user: AuthenticatedUser = Depends(get_current_user)):
-    rows = db.query(StrategySignal, Strategy).join(Strategy).join(UserStrategy,
-        (UserStrategy.strategy_id == StrategySignal.strategy_id) &
-        (UserStrategy.timeframe_minutes == StrategySignal.timeframe_minutes)).join(
+    rows = db.query(StrategySignal, Strategy).join(Strategy).join(
+        strategy_execution_table,
+        (strategy_execution_table.c.signal_id == StrategySignal.id) &
+        (strategy_execution_table.c.user_id == user.id) &
+        (strategy_execution_table.c.mode == mode),
+    ).join(UserStrategy,
+        UserStrategy.id == strategy_execution_table.c.user_strategy_id).join(
         SupportedMarket, SupportedMarket.id == UserStrategy.market_id).filter(
-        UserStrategy.user_id == user.id, UserStrategy.mode == mode, UserStrategy.enabled.is_(True),
+        UserStrategy.user_id == user.id, UserStrategy.mode == mode,
         SupportedMarket.code == StrategySignal.market, StrategySignal.source != "external_sync",
         Strategy.code != "manual_hold_v1").order_by(StrategySignal.created_at.desc()).limit(50).all()
     return [StrategySignalOut(id=sig.id, strategy_name=s.name, strategy_code=s.code,
