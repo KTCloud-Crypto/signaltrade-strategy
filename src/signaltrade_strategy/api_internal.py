@@ -2,12 +2,13 @@ import hmac
 
 from pydantic import BaseModel
 from fastapi import APIRouter, Depends, Header, HTTPException, status
+from sqlalchemy import select
 from sqlalchemy.orm import Session
 
 from signaltrade_strategy.database import get_db
 from signaltrade_strategy.config import settings
 from signaltrade_strategy.market_data import get_current_price
-from signaltrade_strategy.models.strategy import UserStrategy
+from signaltrade_strategy.models.strategy import Strategy, SupportedMarket, UserStrategy
 from signaltrade_strategy.subscription_control import set_subscriptions_paused
 
 
@@ -28,6 +29,19 @@ class PauseSubscriptionsCommand(BaseModel):
     user_id: int
     subscription_ids: list[int]
     paused: bool
+
+
+@router.get("/users/{user_id}/subscriptions")
+def user_subscriptions(user_id: int, db: Session = Depends(get_db)) -> list[dict]:
+    rows = db.execute(select(
+        UserStrategy.id, UserStrategy.mode, UserStrategy.invest_ratio,
+        UserStrategy.timeframe_minutes, UserStrategy.paused,
+        Strategy.code.label("strategy_code"), Strategy.name.label("strategy_name"),
+        SupportedMarket.code.label("market"),
+    ).select_from(UserStrategy).join(Strategy).join(SupportedMarket).where(
+        UserStrategy.user_id == user_id, UserStrategy.enabled.is_(True),
+        Strategy.enabled.is_(True)).order_by(SupportedMarket.sort_order, Strategy.id)).mappings().all()
+    return [dict(row) for row in rows]
 
 
 @router.post("/subscriptions/pause")
