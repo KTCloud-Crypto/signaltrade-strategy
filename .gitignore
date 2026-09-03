@@ -14,3 +14,10 @@ build/
 *.key
 *.p12
 *.pfx
+kubeconfig*
+coverage.xml
+.coverage
+htmlcov/
+.mypy_cache/
+.tox/
+.nox/
