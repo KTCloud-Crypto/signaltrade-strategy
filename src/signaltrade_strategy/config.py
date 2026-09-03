@@ -18,6 +18,8 @@ class Settings(BaseSettings):
     metrics_enabled: bool = True
     worker_metrics_port: int = 9101
     internal_service_token: str = ""
+    identity_service_url: str = "http://signaltrade-identity:8000"
+    identity_service_timeout_seconds: float = 5.0
 
     @property
     def watch_market_list(self) -> list[str]:

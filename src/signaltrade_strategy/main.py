@@ -3,10 +3,12 @@ from sqlalchemy import text
 from sqlalchemy.exc import SQLAlchemyError
 
 from signaltrade_strategy.api_internal import router as internal_router
+from signaltrade_strategy.api_public import router as public_router
 from signaltrade_strategy.database import SessionLocal
 
 app = FastAPI(title="SignalTrade Strategy API")
 app.include_router(internal_router)
+app.include_router(public_router)
 
 
 @app.get("/health")
