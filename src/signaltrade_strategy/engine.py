@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import asyncio
 import logging
+import time
 from dataclasses import dataclass
 from datetime import datetime
 
@@ -13,6 +14,7 @@ from signaltrade_strategy.evaluators import StrategyEvaluator, create_evaluator
 from signaltrade_strategy.market_data import Candle, CandleBuilder, TradeTick, fetch_completed_minute_candles
 from signaltrade_strategy.models.strategy import Strategy, SupportedMarket, UserStrategy
 from signaltrade_strategy.models.strategy_signal import StrategyRuntime, StrategySignal
+from signaltrade_strategy.risk_exit import create_triggered_exit_signals
 from signaltrade_strategy.strategy_events import enqueue_strategy_signal_created
 from signaltrade_strategy.telemetry import STRATEGY_SIGNALS
 
@@ -20,6 +22,11 @@ logger = logging.getLogger(__name__)
 OFFICIAL_CANDLE_FETCH_ATTEMPTS = 4
 OFFICIAL_CANDLE_RETRY_SECONDS = 0.5
 OFFICIAL_CANDLE_RECOVERY_COUNT = 10
+
+
+def _risk_exits(market: str, price: float):
+    with SessionLocal() as db:
+        return create_triggered_exit_signals(db, market, price)
 
 
 @dataclass(frozen=True, slots=True)
@@ -79,13 +86,14 @@ def _save_evaluation(definition: StrategyDefinition, candle: Candle,
 
 
 class StrategyEngine:
-    """Strategy-owned candle evaluation; execution/risk exits remain service boundaries."""
+    """Evaluate strategy candles and user-specific risk exits from live trade ticks."""
 
     def __init__(self):
         self._definitions: dict[tuple[str, str, int], StrategyDefinition] = {}
         self._evaluators: dict[tuple[str, str, int], StrategyEvaluator] = {}
         self._builders: dict[int, CandleBuilder] = {}
         self._last_processed_candle: dict[tuple[str, str, int], int] = {}
+        self._last_risk_check: dict[str, float] = {}
 
     async def refresh(self) -> None:
         definitions = await asyncio.to_thread(_active_definitions)
@@ -108,6 +116,13 @@ class StrategyEngine:
     async def on_trade(self, tick: TradeTick) -> None:
         for builder in tuple(self._builders.values()):
             await builder.on_trade(tick)
+        now = time.monotonic()
+        if now - self._last_risk_check.get(tick.market, 0) < 2:
+            return
+        self._last_risk_check[tick.market] = now
+        exits = await asyncio.to_thread(_risk_exits, tick.market, tick.price)
+        if exits:
+            logger.info("Risk exit signals queued: market=%s count=%s", tick.market, len(exits))
 
     async def _official(self, candidate: Candle) -> list[Candle]:
         for attempt in range(OFFICIAL_CANDLE_FETCH_ATTEMPTS):

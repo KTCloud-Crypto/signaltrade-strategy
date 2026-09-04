@@ -9,6 +9,7 @@ from signaltrade_strategy.config import settings
 from signaltrade_strategy.database import get_db
 from signaltrade_strategy.identity_client import AuthenticatedUser, get_current_user
 from signaltrade_strategy.market_data.upbit_price import get_current_price, get_market_tickers
+from signaltrade_strategy.portfolio_client import PortfolioUnavailable, get_strategy_cash
 from signaltrade_strategy.models import (
     Strategy, StrategyRuntime, StrategySignal, StrategySubscriptionEvent, SupportedMarket,
     UserStrategy, strategy_execution_table,
@@ -22,6 +23,7 @@ from signaltrade_strategy.strategy_events import enqueue_strategy_signal_created
 
 router = APIRouter(prefix="/strategies", tags=["Strategies"])
 ALLOWED_TIMEFRAMES = [1, 3, 5, 10, 15, 30, 60, 240]
+MIN_KRW_ORDER = 5_000
 
 
 def _position_volume(db: Session, subscription_id: int, mode: str) -> float:
@@ -44,7 +46,8 @@ def _position_volume(db: Session, subscription_id: int, mode: str) -> float:
 
 
 def _out(strategy: Strategy, market: SupportedMarket, subscription: UserStrategy | None,
-         runtime: StrategyRuntime | None = None, has_position: bool = False) -> StrategyOut:
+         runtime: StrategyRuntime | None = None, has_position: bool = False,
+         available_cash: float | None = None) -> StrategyOut:
     return StrategyOut(
         id=strategy.id, code=strategy.code, name=strategy.name, description=strategy.description,
         market=market.code, market_name=market.display_name,
@@ -53,7 +56,7 @@ def _out(strategy: Strategy, market: SupportedMarket, subscription: UserStrategy
         selected=bool(subscription and subscription.enabled), paused=bool(subscription and subscription.paused),
         has_open_position=has_position, invest_ratio=subscription.invest_ratio if subscription else 0.0,
         allocated_amount=subscription.allocated_amount if subscription else None,
-        allocation_mode=subscription.allocation_mode if subscription else "ratio", available_cash=None,
+        allocation_mode=subscription.allocation_mode if subscription else "ratio", available_cash=available_cash,
         stop_loss_rate=subscription.stop_loss_rate if subscription else None,
         take_profit_rate=subscription.take_profit_rate if subscription else None,
         selected_timeframe_minutes=subscription.timeframe_minutes if subscription else 0,
@@ -72,6 +75,13 @@ def _market(db: Session, code: str) -> SupportedMarket:
     return item
 
 
+def _available_cash(user_id: int, mode: str, subscription_id: int | None = None) -> float | None:
+    try:
+        return get_strategy_cash(user_id, mode, subscription_id).available_cash
+    except PortfolioUnavailable:
+        return None
+
+
 @router.get("", response_model=list[StrategyOut])
 def list_strategies(mode: Literal["simulated", "live"] = Query("simulated"),
                     market: str = Query("KRW-BTC"), db: Session = Depends(get_db),
@@ -82,13 +92,18 @@ def list_strategies(mode: Literal["simulated", "live"] = Query("simulated"),
     subscriptions = {item.strategy_id: item for item in db.query(UserStrategy).filter_by(
         user_id=user.id, market_id=selected_market.id, mode=mode).all()}
     result = []
+    cash_by_subscription: dict[int | None, float | None] = {}
     for strategy in strategies:
         sub = subscriptions.get(strategy.id)
         timeframe = sub.timeframe_minutes if sub else strategy.timeframe_minutes
         runtime = db.query(StrategyRuntime).filter_by(strategy_id=strategy.id,
             market=selected_market.code, timeframe_minutes=timeframe).first()
+        subscription_id = sub.id if sub else None
+        if subscription_id not in cash_by_subscription:
+            cash_by_subscription[subscription_id] = _available_cash(user.id, mode, subscription_id)
         result.append(_out(strategy, selected_market, sub, runtime,
-                           bool(sub and _position_volume(db, sub.id, mode) > 0)))
+                           bool(sub and _position_volume(db, sub.id, mode) > 0),
+                           cash_by_subscription[subscription_id]))
     return result
 
 
@@ -104,7 +119,8 @@ def list_active(mode: Literal["simulated", "live"] = Query("simulated"),
         if sub.enabled or has_position:
             runtime = db.query(StrategyRuntime).filter_by(strategy_id=strategy.id, market=market.code,
                 timeframe_minutes=sub.timeframe_minutes).first()
-            result.append(_out(strategy, market, sub, runtime, has_position))
+            result.append(_out(strategy, market, sub, runtime, has_position,
+                               _available_cash(user.id, mode, sub.id)))
     return result
 
 
@@ -181,11 +197,27 @@ def update_subscription(strategy_id: int, payload: StrategySubscriptionIn, reque
         raise HTTPException(422, "전략을 활성화하려면 분봉을 설정한 후 저장해 주세요.")
     if payload.enabled and payload.invest_ratio is None and payload.invest_amount is None:
         raise HTTPException(422, "전략을 활성화하려면 투자 비율 또는 주문 금액을 설정해 주세요.")
+    available_cash = None
+    allocated_amount = payload.invest_amount
+    if payload.enabled and (payload.invest_amount is not None or payload.invest_ratio is not None):
+        try:
+            cash = get_strategy_cash(user.id, mode, sub.id if sub else None)
+        except PortfolioUnavailable as error:
+            raise HTTPException(503, str(error)) from error
+        available_cash = cash.available_cash
+        if payload.invest_amount is not None:
+            if payload.invest_amount < MIN_KRW_ORDER:
+                raise HTTPException(409, f"주문 금액은 최소 {MIN_KRW_ORDER:,.0f}원 이상이어야 합니다.")
+            if payload.invest_amount > available_cash:
+                raise HTTPException(409, f"주문 금액이 주문 가능 금액({available_cash:,.0f}원)을 초과합니다. 다른 전략이 확보한 금액을 제외한 현금까지만 배정할 수 있습니다.")
+        elif payload.invest_ratio is not None:
+            allocated_amount = float(int(available_cash * payload.invest_ratio))
     was_enabled = bool(sub and sub.enabled)
     if sub is None:
         sub = UserStrategy(user_id=user.id, strategy_id=strategy.id, market_id=selected_market.id,
             mode=mode, invest_ratio=payload.invest_ratio or strategy.default_invest_ratio,
-            allocated_amount=payload.invest_amount, allocation_mode="amount" if payload.invest_amount else "ratio",
+            allocated_amount=allocated_amount,
+            allocation_mode="amount" if payload.invest_amount is not None else "ratio",
             timeframe_minutes=payload.timeframe_minutes or strategy.timeframe_minutes,
             stop_loss_rate=payload.stop_loss_rate or None, take_profit_rate=payload.take_profit_rate or None,
             enabled=payload.enabled)
@@ -199,6 +231,8 @@ def update_subscription(strategy_id: int, payload: StrategySubscriptionIn, reque
         if payload.invest_ratio is not None: sub.invest_ratio = payload.invest_ratio
         if payload.invest_amount is not None:
             sub.allocated_amount, sub.allocation_mode = payload.invest_amount, "amount"
+        elif payload.enabled and payload.invest_ratio is not None:
+            sub.allocated_amount, sub.allocation_mode = allocated_amount, "ratio"
         if payload.timeframe_minutes is not None: sub.timeframe_minutes = payload.timeframe_minutes
         if "stop_loss_rate" in payload.model_fields_set: sub.stop_loss_rate = payload.stop_loss_rate or None
         if "take_profit_rate" in payload.model_fields_set: sub.take_profit_rate = payload.take_profit_rate or None
@@ -209,7 +243,8 @@ def update_subscription(strategy_id: int, payload: StrategySubscriptionIn, reque
     db.commit(); db.refresh(sub)
     runtime = db.query(StrategyRuntime).filter_by(strategy_id=strategy.id, market=selected_market.code,
         timeframe_minutes=sub.timeframe_minutes).first()
-    return _out(strategy, selected_market, sub, runtime, _position_volume(db, sub.id, mode) > 0)
+    return _out(strategy, selected_market, sub, runtime,
+                _position_volume(db, sub.id, mode) > 0, available_cash)
 
 
 @router.post("/{strategy_id}/test-signal", response_model=StrategyTestSignalOut)
