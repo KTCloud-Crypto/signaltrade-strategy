@@ -1,9 +1,13 @@
+from sqlalchemy import insert
+
 from signaltrade_strategy.message_contract import MessageEnvelope
+from signaltrade_strategy.models import user_table
 from signaltrade_strategy.models.strategy import Strategy, SupportedMarket, UserStrategy
 from signaltrade_strategy.strategy_commands import apply_allocation_changed
 
 
 def test_allocation_changed_updates_strategy_owned_subscription(db_session):
+    db_session.execute(insert(user_table), {"id": 1})
     strategy = Strategy(code="command-test", name="test", description="test",
                         timeframe_minutes=10, parameters={}, default_invest_ratio=0.1)
     market = SupportedMarket(code="KRW-TEST", display_name="test")
