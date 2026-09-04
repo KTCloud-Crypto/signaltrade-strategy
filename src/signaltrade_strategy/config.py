@@ -10,8 +10,9 @@ class Settings(BaseSettings):
     watch_markets: str = "KRW-BTC,KRW-ETH,KRW-XRP,KRW-SOL,KRW-DOGE,KRW-TRX"
     strategy_refresh_seconds: int = 30
     aws_region: str = "ap-northeast-2"
-    aws_access_key_id: str = "test"
-    aws_secret_access_key: str = "test"
+    # LocalStack에서만 .env로 테스트 키를 주입합니다. EKS에서는 Pod Identity를 사용합니다.
+    aws_access_key_id: str | None = None
+    aws_secret_access_key: str | None = None
     sqs_endpoint_url: str | None = None
     sqs_strategy_command_queue_name: str = "signaltrade-strategy-commands"
     sqs_strategy_visibility_timeout_seconds: int = 60
