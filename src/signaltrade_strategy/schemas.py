@@ -1,7 +1,7 @@
 from datetime import datetime
 from typing import Literal
 
-from pydantic import BaseModel, Field
+from pydantic import BaseModel, Field, model_validator
 
 
 class StrategyOut(BaseModel):
@@ -34,11 +34,17 @@ class StrategyOut(BaseModel):
 class StrategySubscriptionIn(BaseModel):
     enabled: bool
     force_disable: bool = False
-    invest_ratio: float | None = Field(default=None, ge=0.01, le=1.0)
+    invest_ratio: float | None = Field(default=None, ge=0, le=1.0)
     invest_amount: float | None = Field(default=None, ge=0)
     timeframe_minutes: Literal[1, 3, 5, 10, 15, 30, 60, 240] | None = None
     stop_loss_rate: float | None = Field(default=None, ge=0, le=1.0)
     take_profit_rate: float | None = Field(default=None, ge=0, le=1.0)
+
+    @model_validator(mode="after")
+    def validate_enabled_allocation(self):
+        if self.enabled and self.invest_ratio is not None and self.invest_ratio < 0.01:
+            raise ValueError("활성 전략의 투자 비율은 0.01 이상이어야 합니다.")
+        return self
 
 
 class SupportedMarketOut(BaseModel):

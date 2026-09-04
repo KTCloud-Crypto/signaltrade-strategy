@@ -5,7 +5,13 @@ from signaltrade_strategy.models.message_outbox import MessageOutbox
 from signaltrade_strategy.models.strategy_signal import StrategySignal
 
 
-def enqueue_strategy_signal_created(db: Session, signal: StrategySignal) -> MessageOutbox:
+def enqueue_strategy_signal_created(
+    db: Session,
+    signal: StrategySignal,
+    *,
+    target_user_id: int | None = None,
+    target_mode: str | None = None,
+) -> MessageOutbox:
     db.flush()
     if signal.id is None:
         raise ValueError("StrategySignal must have an id before creating its event")
@@ -18,7 +24,7 @@ def enqueue_strategy_signal_created(db: Session, signal: StrategySignal) -> Mess
                  "action": signal.action, "source": signal.source,
                  "candle_open_time": signal.candle_open_time.isoformat(),
                  "close_price": signal.close_price, "metrics": signal.metrics or {},
-                 "target_user_id": None, "target_mode": None},
+                 "target_user_id": target_user_id, "target_mode": target_mode},
     )
     outbox = MessageOutbox(
         message_id=str(envelope.message_id), message_type=envelope.message_type,
