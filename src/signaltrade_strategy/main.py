@@ -7,8 +7,10 @@ from starlette.responses import Response
 from signaltrade_strategy.api_internal import router as internal_router
 from signaltrade_strategy.api_public import router as public_router
 from signaltrade_strategy.database import SessionLocal
+from signaltrade_strategy.telemetry import instrument_http
 
 app = FastAPI(title="SignalTrade Strategy API")
+instrument_http(app)
 app.include_router(internal_router)
 app.include_router(public_router)
 
