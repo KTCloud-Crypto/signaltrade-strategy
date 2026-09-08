@@ -186,7 +186,10 @@ def update_subscription(strategy_id: int, payload: StrategySubscriptionIn, reque
                         market: str = Query("KRW-BTC"), db: Session = Depends(get_db),
                         user: AuthenticatedUser = Depends(get_current_user)):
     if payload.enabled and mode == "live" and not user.live_trading_enabled:
-        raise HTTPException(409, "실전투자를 사용하려면 먼저 Upbit API Key를 연결해 주세요.")
+        raise HTTPException(
+            409,
+            "실전 자동매매가 비활성화되어 있습니다. 계정 설정에서 실전투자를 활성화한 후 다시 시도해 주세요.",
+        )
     strategy = db.query(Strategy).filter_by(id=strategy_id, enabled=True).first()
     if strategy is None:
         raise HTTPException(404, "전략을 찾을 수 없습니다.")
