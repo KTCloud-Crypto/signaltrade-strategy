@@ -3,10 +3,12 @@ from sqlalchemy.orm import declarative_base, sessionmaker
 from sqlalchemy.pool import StaticPool
 
 from signaltrade_strategy.config import settings
+from signaltrade_strategy.telemetry import instrument_db_pool
 
 options = ({"connect_args": {"check_same_thread": False}, "poolclass": StaticPool}
            if settings.database_url.startswith("sqlite") else {})
 engine = create_engine(settings.database_url, **options)
+instrument_db_pool(engine)
 SessionLocal = sessionmaker(autocommit=False, autoflush=False, bind=engine)
 Base = declarative_base()
 
@@ -17,4 +19,3 @@ def get_db():
         yield db
     finally:
         db.close()
-
