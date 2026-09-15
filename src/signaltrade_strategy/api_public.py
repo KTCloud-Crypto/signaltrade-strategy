@@ -91,20 +91,25 @@ def list_strategies(mode: Literal["simulated", "live"] = Query("simulated"),
                                             Strategy.code != "manual_hold_v1").order_by(Strategy.id).all()
     subscriptions = {item.strategy_id: item for item in db.query(UserStrategy).filter_by(
         user_id=user.id, market_id=selected_market.id, mode=mode).all()}
-    result = []
-    cash_by_subscription: dict[int | None, float | None] = {}
+    local_result: list[tuple[StrategyOut, int | None]] = []
     for strategy in strategies:
         sub = subscriptions.get(strategy.id)
         timeframe = sub.timeframe_minutes if sub else strategy.timeframe_minutes
         runtime = db.query(StrategyRuntime).filter_by(strategy_id=strategy.id,
             market=selected_market.code, timeframe_minutes=timeframe).first()
         subscription_id = sub.id if sub else None
-        if subscription_id not in cash_by_subscription:
-            cash_by_subscription[subscription_id] = _available_cash(user.id, mode, subscription_id)
-        result.append(_out(strategy, selected_market, sub, runtime,
-                           bool(sub and _position_volume(db, sub.id, mode) > 0),
-                           cash_by_subscription[subscription_id]))
-    return result
+        local_result.append((_out(strategy, selected_market, sub, runtime,
+                                  bool(sub and _position_volume(db, sub.id, mode) > 0)),
+                             subscription_id))
+
+    # Do not hold a PostgreSQL transaction while waiting for Portfolio over HTTP.
+    db.close()
+    cash_by_subscription = {
+        subscription_id: _available_cash(user.id, mode, subscription_id)
+        for subscription_id in {item[1] for item in local_result}
+    }
+    return [item.model_copy(update={"available_cash": cash_by_subscription[subscription_id]})
+            for item, subscription_id in local_result]
 
 
 @router.get("/active", response_model=list[StrategyOut])
@@ -113,15 +118,18 @@ def list_active(mode: Literal["simulated", "live"] = Query("simulated"),
     rows = db.query(UserStrategy, Strategy, SupportedMarket).join(Strategy).join(SupportedMarket).filter(
         UserStrategy.user_id == user.id, UserStrategy.mode == mode,
         Strategy.code != "manual_hold_v1").all()
-    result = []
+    local_result: list[tuple[StrategyOut, int]] = []
     for sub, strategy, market in rows:
         has_position = _position_volume(db, sub.id, mode) > 0
         if sub.enabled or has_position:
             runtime = db.query(StrategyRuntime).filter_by(strategy_id=strategy.id, market=market.code,
                 timeframe_minutes=sub.timeframe_minutes).first()
-            result.append(_out(strategy, market, sub, runtime, has_position,
-                               _available_cash(user.id, mode, sub.id)))
-    return result
+            local_result.append((_out(strategy, market, sub, runtime, has_position), sub.id))
+
+    # Portfolio latency must not consume a connection from this service's DB pool.
+    db.close()
+    return [item.model_copy(update={"available_cash": _available_cash(user.id, mode, subscription_id)})
+            for item, subscription_id in local_result]
 
 
 @router.get("/markets", response_model=list[SupportedMarketOut])
@@ -134,6 +142,8 @@ def markets(db: Session = Depends(get_db), _: AuthenticatedUser = Depends(get_cu
 async def tickers(db: Session = Depends(get_db), _: AuthenticatedUser = Depends(get_current_user)):
     names = {item.code: item.display_name for item in db.query(SupportedMarket).filter(
         SupportedMarket.enabled.is_(True)).all()}
+    # The remaining work is an external Upbit request, so release the DB connection first.
+    db.close()
     return [MarketTickerOut(market=item["market"], display_name=names.get(item["market"], item["market"]),
         price=float(item.get("trade_price") or 0), change_price=float(item.get("signed_change_price") or 0),
         change_rate=float(item.get("signed_change_rate") or 0) * 100,
